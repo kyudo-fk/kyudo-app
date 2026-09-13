@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>弓道フォームAI</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1220;color:#f8fafc;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif}
+.app{max-width:860px;margin:auto;padding:14px}
+h1{font-size:23px;margin:0}
+h2{font-size:18px;margin:0 0 6px}
+.muted{color:#94a3b8;font-size:12px;line-height:1.6}
+.panel{background:#111827;border:1px solid #334155;border-radius:18px;padding:14px;margin:12px 0}
+.upload{border:2px dashed #475569;text-align:center;padding:22px 14px}
+.upload label{display:block;background:#f59e0b;color:#111827;border-radius:12px;padding:14px;font-weight:900;cursor:pointer;margin-top:12px}
+.upload label:active{transform:scale(.99)}
+.status{padding:9px 0;color:#cbd5e1;font-size:13px}
+.progress{height:9px;background:#1e293b;border-radius:99px;overflow:hidden;margin:8px 0}
+.progress>div{height:100%;width:0;background:#f59e0b;transition:width .2s}
+.video{position:relative;background:#020617;border-radius:14px;overflow:hidden;margin-top:10px}
+.video video{width:100%;display:block;max-height:55vh;background:#020617}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
+.card{background:#0b1220;border:1px solid #334155;border-radius:12px;padding:11px}
+.label{font-size:11px;color:#94a3b8}
+.value{font-size:22px;font-weight:900;margin-top:2px}
+.resultScore{font-size:42px;font-weight:950;text-align:center;padding:10px}
+.resultScore small{font-size:12px;font-weight:600;color:#94a3b8}
+.resultBlock{border-top:1px solid #334155;padding:11px 0}
+.resultBlock:first-child{border-top:0}
+.resultBlock b{display:block;margin-bottom:5px}
+.pill{display:inline-block;border:1px solid #475569;border-radius:999px;padding:5px 8px;margin:3px;font-size:12px}
+button{border:0;border-radius:10px;padding:10px 12px;font-weight:800;cursor:pointer}
+button.secondary{background:#e2e8f0;color:#0f172a}
+button.primary{background:#f59e0b;color:#111827}
+button:disabled{opacity:.45;cursor:not-allowed}
+.candidate button{margin:4px 4px 0 0}
+.notice{background:#0f1b30;border-left:4px solid #f59e0b;padding:10px;border-radius:8px;font-size:12px;line-height:1.6}
+.footer{text-align:center;color:#64748b;font-size:11px;padding:12px}
+@media(min-width:650px){.grid{grid-template-columns:repeat(4,1fr)}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@0.0.7/dist/pose-detection.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="panel" style="margin-top:0">
+    <h1>🏹 弓道フォームAI</h1>
+    <div class="muted">端末動画アップロード専用｜動画を選ぶとAI解析を自動開始</div>
+  </header>
+
+  <section class="panel upload">
+    <h2>📱 動画を選択</h2>
+    <div class="muted">スマホ・PCに保存されている弓道動画を選択してください。カメラ撮影機能はありません。</div>
+    <label for="videoInput">🎥 端末から動画を選択</label>
+    <input id="videoInput" type="file" accept="video/*" style="display:none">
+    <div id="fileName" class="status">まだ動画が選択されていません。</div>
+    <div class="progress"><div id="progressBar"></div></div>
+    <div id="status" class="status">AIモデルを準備しています…</div>
+  </section>
+
+  <section class="panel">
+    <h2>🎬 動画</h2>
+    <div class="video">
+      <video id="video" playsinline controls preload="metadata"></video>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:9px">
+      <button id="slowBtn" class="secondary" disabled>🐢 0.5倍速</button>
+      <button id="reanalyzeBtn" class="primary" disabled>🔄 もう一度解析</button>
+    </div>
+  </section>
+
+  <section id="resultPanel" class="panel" style="display:none">
+    <h2>📊 AI解析結果</h2>
+    <div id="score" class="resultScore">--<small>/100</small></div>
+
+    <div class="resultBlock">
+      <b>👍 良かった点</b>
+      <div id="good"></div>
+    </div>
+
+    <div class="resultBlock">
+      <b>🔧 改善ポイント</b>
+      <div id="bad"></div>
+    </div>
+
+    <div class="resultBlock">
+      <b>🎯 離れ候補</b>
+      <div class="muted">姿勢の動きから推定した候補です。実際の離れかどうかは動画で確認してください。</div>
+      <div id="candidates" class="candidate" style="margin-top:5px"></div>
+    </div>
+
+    <div class="resultBlock">
+      <b>🏹 射法八節・参考評価</b>
+      <div id="phases"></div>
+    </div>
+
+    <div class="resultBlock">
+      <b>📐 詳細指標</b>
+      <div id="details" class="muted"></div>
+    </div>
+
+    <div class="resultBlock">
+      <b>🏋️ 今日の練習</b>
+      <div id="practice"></div>
+    </div>
+
+    <div class="notice">
+      ⚠️ この評価はMoveNetによる姿勢検出を使った<strong>練習用の参考指標</strong>です。
+      学校・流派・撮影角度などによって結果が変わります。点数だけで技術を判断しないでください。
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>📈 検出データ</h2>
+    <div class="grid">
+      <div class="card"><div class="label">解析フレーム</div><div id="frameCount" class="value">--</div></div>
+      <div class="card"><div class="label">平均検出率</div><div id="avgConf" class="value">--</div></div>
+      <div class="card"><div class="label">平均肩左右差</div><div id="avgShoulder" class="value">--</div></div>
+      <div class="card"><div class="label">最大頭部移動</div><div id="maxHead" class="value">--</div></div>
+    </div>
+  </section>
+
+  <div class="footer">弓道フォームAI｜端末内の選択動画をブラウザ上で解析</div>
+</div>
+
+<script>
+let detector=null;
+let currentFile=null;
+let objectUrl=null;
+let analyzing=false;
+let lastResult=null;
+
+const $=id=>document.getElementById(id);
+
+async function initAI(){
+  try{
+    await tf.ready();
+    detector=await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      {modelType:poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING}
+    );
+    $("status").textContent="✅ AIモデル準備完了。動画を選択してください。";
+  }catch(e){
+    console.error(e);
+    $("status").textContent="❌ AIモデルを読み込めませんでした。インターネット接続を確認してください。";
+  }
+}
+
+function waitForSeek(video, time){
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=()=>{if(done)return;done=true;video.removeEventListener("seeked",finish);resolve()};
+    video.addEventListener("seeked",finish);
+    video.currentTime=Math.max(0,Math.min(time,video.duration||0));
+    setTimeout(finish,1200);
+  });
+}
+
+function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0}
+function clamp(x,a,b){return Math.max(a,Math.min(b,x))}
+function angle(a,b,c){
+  const ab=Math.hypot(a.x-b.x,a.y-b.y), cb=Math.hypot(c.x-b.x,c.y-b.y);
+  if(!ab||!cb)return 0;
+  return Math.acos(clamp(((a.x-b.x)*(c.x-b.x)+(a.y-b.y)*(c.y-b.y))/(ab*cb),-1,1))*180/Math.PI;
+}
+
+async function loadSelectedFile(file){
+  if(!file || !file.type.startsWith("video/")){
+    $("fileName").textContent="❌ 動画ファイルを選択してください。";
+    return false;
+  }
+  currentFile=file;
+  if(objectUrl)URL.revokeObjectURL(objectUrl);
+  objectUrl=URL.createObjectURL(file);
+  const v=$("video");
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+
+  $("fileName").textContent="📥 動画を読み込んでいます…";
+  $("status").textContent="動画を読み込んでいます…";
+  $("progressBar").style.width="0%";
+
+  try{
+    await new Promise((resolve,reject)=>{
+      let done=false;
+      const ok=()=>{
+        if(done)return;done=true;
+        cleanup();resolve();
+      };
+      const err=()=>{
+        if(done)return;done=true;
+        cleanup();reject(new Error("video-load-error"));
+      };
+      const cleanup=()=>{
+        v.removeEventListener("loadedmetadata",ok);
+        v.removeEventListener("canplay",ok);
+        v.removeEventListener("error",err);
+      };
+      v.addEventListener("loadedmetadata",ok);
+      v.addEventListener("canplay",ok);
+      v.addEventListener("error",err);
+      v.src=objectUrl;
+      v.load();
+      setTimeout(()=>{if(v.readyState>=1)ok();else err()},10000);
+    });
+    $("fileName").textContent=`✅ ${file.name}｜${Number.isFinite(v.duration)?v.duration.toFixed(1):"?"}秒`;
+    $("slowBtn").disabled=false;
+    $("reanalyzeBtn").disabled=false;
+    return true;
+  }catch(e){
+    console.error(e);
+    $("fileName").textContent="❌ 動画を読み込めませんでした。MP4（H.264）を試してください。";
+    $("status").textContent="動画の読み込みに失敗しました。";
+    return false;
+  }
+}
+
+async function analyze(){
+  if(analyzing || !currentFile)return;
+  const v=$("video");
+  if(!Number.isFinite(v.duration)||v.duration<=0)return;
+  if(!detector){
+    $("status").textContent="AIモデルを準備しています…";
+    await initAI();
+    if(!detector)return;
+  }
+
+  analyzing=true;
+  $("resultPanel").style.display="none";
+  $("status").textContent="🤖 AI解析を開始しています…";
+  $("progressBar").style.width="0%";
+
+  try{
+    const n=Math.min(100,Math.max(30,Math.floor(v.duration*4)));
+    const rows=[];
+    let prev=null;
+    let firstNose=null;
+
+    for(let i=0;i<n;i++){
+      const t=(v.duration*i)/(n-1);
+      await waitForSeek(v,t);
+      const poses=await detector.estimatePoses(v,{flipHorizontal:false});
+      const p=poses[0];
+
+      if(p){
+        const k=p.keypoints;
+        const ls=k[5],rs=k[6],le=k[7],re=k[8],lw=k[9],rw=k[10],lh=k[11],rh=k[12],nose=k[0];
+        if(ls&&rs&&lh&&rh){
+          const sw=Math.max(1,Math.hypot(ls.x-rs.x,ls.y-rs.y));
+          const sm={x:(ls.x+rs.x)/2,y:(ls.y+rs.y)/2};
+          const hm={x:(lh.x+rh.x)/2,y:(lh.y+rh.y)/2};
+          const shoulder=Math.abs(ls.y-rs.y)/sw*100;
+          const trunk=Math.abs(Math.atan2(sm.x-hm.x,sm.y-hm.y)*180/Math.PI);
+          const head=firstNose&&nose?Math.hypot(nose.x-firstNose.x,nose.y-firstNose.y)/sw*100:0;
+          if(nose&&!firstNose)firstNose={x:nose.x,y:nose.y};
+          const conf=k.filter(q=>q&&q.score>.3).length/17*100;
+          const velocity=prev?Math.hypot(sm.x-prev.x,sm.y-prev.y)/sw*100:0;
+          rows.push({
+            t,shoulder,trunk,head,conf,velocity,
+            elL:le&&lw?angle(ls,le,lw):0,
+            elR:re&&rw?angle(rs,re,rw):0,
+            cx:sm.x,cy:sm.y,sw
+          });
+          prev=sm;
+        }
+      }
+
+      $("progressBar").style.width=`${Math.round((i+1)/n*100)}%`;
+      $("status").textContent=`🤖 AI解析中… ${Math.round((i+1)/n*100)}%`;
+    }
+
+    if(!rows.length)throw new Error("no-pose");
+
+    const conf=avg(rows.map(x=>x.conf));
+    const shoulder=avg(rows.map(x=>x.shoulder));
+    const trunk=avg(rows.map(x=>x.trunk));
+    const head=avg(rows.map(x=>x.head));
+    const elL=avg(rows.map(x=>x.elL).filter(Boolean));
+    const elR=avg(rows.map(x=>x.elR).filter(Boolean));
+
+    let score=100;
+    if(shoulder>5)score-=Math.min(18,(shoulder-5)*2.0);
+    if(trunk>6)score-=Math.min(18,(trunk-6)*2.0);
+    if(head>12)score-=10;
+    if(conf<70)score-=10;
+    const elbow=(elL&&elR)?(elL+elR)/2:0;
+    if(elbow&&(elbow<125||elbow>170))score-=8;
+    score=Math.round(clamp(score,0,100));
+
+    const good=[],bad=[];
+    if(shoulder<=5)good.push("肩の高さが安定しています");
+    else bad.push("左右の肩の高さをそろえる意識を確認");
+    if(trunk<=6)good.push("胴の傾きが比較的安定しています");
+    else bad.push("胴を立てて上体を安定させる");
+    if(head<12)good.push("頭部の移動が小さめです");
+    else bad.push("会〜離れで頭を動かさないよう確認");
+    if(elbow&&elbow>=125&&elbow<=170)good.push("肘の角度は大きく崩れていません");
+    else if(elbow)bad.push("肘の位置・伸びを動画で確認");
+    if(!good.length)good.push("今回の簡易指標では大きな崩れは検出されませんでした");
+    if(!bad.length)bad.push("現在のフォームを再現する練習を続けましょう");
+
+    const vals=rows.map((q,i)=>i?Math.hypot(q.cx-rows[i-1].cx,q.cy-rows[i-1].cy)/(q.sw||100)*100:0);
+    const peaks=[];
+    for(let i=2;i<vals.length-2;i++){
+      if(vals[i]>vals[i-1]&&vals[i]>=vals[i+1]&&vals[i]>2.5){
+        const t=rows[i].t;
+        const last=peaks[peaks.length-1];
+        if(!last||t-last.time>.8)peaks.push({time:t,score:vals[i]});
+        else if(vals[i]>last.score)peaks[peaks.length-1]={time:t,score:vals[i]};
+      }
+    }
+    const candidates=peaks.sort((a,b)=>b.score-a.score).slice(0,3).sort((a,b)=>a.time-b.time);
+
+    const phaseNames=["足踏み","胴造り","弓構え","打起こし","引分け","会","離れ","残心"];
+    const phaseScores=phaseNames.map((name,i)=>{
+      const a=i*v.duration/8,b=(i+1)*v.duration/8;
+      const r=rows.filter(x=>x.t>=a&&x.t<=b);
+      let s=75;
+      if(avg(r.map(x=>x.shoulder))>8)s-=10;
+      if(avg(r.map(x=>x.trunk))>7)s-=10;
+      if(name==="会"&&avg(r.map(x=>x.head))>12)s-=8;
+      return [name,Math.round(clamp(s,0,100))];
+    });
+
+    renderResult({score,good,bad,candidates,phaseScores,conf,shoulder,trunk,head,elL,elR,rows});
+    $("status").textContent="✅ 自動解析完了";
+    $("progressBar").style.width="100%";
+    v.pause();
+    v.currentTime=0;
+  }catch(e){
+    console.error(e);
+    $("status").textContent="❌ 解析できませんでした。全身が映る動画・MP4（H.264）を試してください。";
+  }finally{
+    analyzing=false;
+  }
+}
+
+function renderResult(r){
+  lastResult=r;
+  $("resultPanel").style.display="block";
+  $("score").innerHTML=`${r.score}<small>/100</small>`;
+  $("good").innerHTML=r.good.map(x=>`<span class="pill">✓ ${x}</span>`).join("");
+  $("bad").innerHTML=r.bad.map(x=>`<span class="pill">・${x}</span>`).join("");
+  $("candidates").innerHTML=r.candidates.length
+    ? r.candidates.map((x,i)=>`<button class="secondary" onclick="jumpTo(${x.time})">🎯 ${x.time.toFixed(2)}秒</button>`).join("")
+    : '<span class="muted">候補を検出できませんでした。</span>';
+  $("phases").innerHTML=r.phaseScores.map(x=>`<span class="pill">${x[0]}：${x[1]}点</span>`).join("");
+  $("details").textContent=`肩左右差 ${r.shoulder.toFixed(1)}%｜胴傾き ${r.trunk.toFixed(1)}°｜左肘 ${r.elL?r.elL.toFixed(0):"-"}°｜右肘 ${r.elR?r.elR.toFixed(0):"-"}°｜頭部移動 ${r.head.toFixed(1)}%`;
+  $("frameCount").textContent=r.rows.length;
+  $("avgConf").textContent=Math.round(r.conf)+"%";
+  $("avgShoulder").textContent=r.shoulder.toFixed(1)+"%";
+  $("maxHead").textContent=r.head.toFixed(1)+"%";
+  $("practice").innerHTML=`① 改善ポイントを意識して5本　→　② 0.5倍速で確認　→　③ 同じ条件で再撮影して比較`;
+  $("resultPanel").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function jumpTo(t){
+  const v=$("video");
+  v.currentTime=t;
+  v.playbackRate=.5;
+  v.play();
+}
+$("videoInput").addEventListener("change",async e=>{
+  const file=e.target.files&&e.target.files[0];
+  if(!file)return;
+  const ok=await loadSelectedFile(file);
+  if(ok)await analyze();
+});
+$("reanalyzeBtn").addEventListener("click",()=>analyze());
+$("slowBtn").addEventListener("click",()=>{
+  const v=$("video");
+  v.playbackRate=v.playbackRate===.5?1:.5;
+  $("slowBtn").textContent=v.playbackRate===.5?"▶ 1倍速":"🐢 0.5倍速";
+});
+initAI();
+</script>
+</body>
+</html>
