@@ -2,14 +2,6 @@
 
 端末から弓道動画を選択すると、ブラウザ上でMoveNetを使って姿勢を解析する練習用Webアプリです。
 
-## GitHub Pagesで公開
-
-1. このフォルダの `index.html` をGitHubリポジトリのルートにアップロード
-2. GitHubの **Settings → Pages**
-3. Sourceを **Deploy from a branch**
-4. Branchを **main**
-5. Folderを **/ (root)**
-6. Save
 
 ## 使い方
 
